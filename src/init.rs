@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use once_cell::sync::OnceCell;
 #[cfg(feature = "otlp")]
-use opentelemetry::global;
+use opentelemetry::{KeyValue, global};
 #[cfg(feature = "otlp")]
 use opentelemetry_otlp::{
     MetricExporter, SpanExporter, WithExportConfig, WithHttpConfig, WithTonicConfig,
@@ -218,9 +218,13 @@ fn install_otlp_from_export(cfg: TelemetryConfig, export: ExportConfig) -> Resul
         _ => "http://localhost:4317".into(),
     });
 
-    let resource = Resource::builder()
-        .with_service_name(cfg.service_name)
-        .build();
+    let mut resource_builder = Resource::builder()
+        .with_service_name(cfg.service_name);
+    for (key, value) in &export.resource_attributes {
+        resource_builder =
+            resource_builder.with_attribute(KeyValue::new(key.clone(), value.clone()));
+    }
+    let resource = resource_builder.build();
 
     let sampler = match export.sampling {
         Sampling::TraceIdRatio(ratio) if (0.0..1.0).contains(&ratio) && ratio < 1.0 => {

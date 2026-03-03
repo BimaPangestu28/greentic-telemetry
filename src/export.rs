@@ -35,6 +35,8 @@ pub struct ExportConfig {
     pub headers: HashMap<String, String>,
     pub sampling: Sampling,
     pub compression: Option<Compression>,
+    /// Additional OTel resource attributes attached to the tracer/meter provider.
+    pub resource_attributes: HashMap<String, String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,6 +52,7 @@ impl ExportConfig {
             headers: HashMap::new(),
             sampling: Sampling::Parent,
             compression: None,
+            resource_attributes: HashMap::new(),
         }
     }
 
@@ -110,6 +113,7 @@ impl ExportConfig {
             headers,
             sampling,
             compression,
+            resource_attributes: HashMap::new(),
         })
     }
 }
