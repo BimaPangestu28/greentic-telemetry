@@ -12,6 +12,10 @@ pub mod honeycomb;
 pub mod jaeger;
 pub mod loki;
 pub mod newrelic;
+pub mod otlp_grpc;
+pub mod otlp_http;
+pub mod stdout;
+pub mod zipkin;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CloudPreset {
@@ -25,6 +29,10 @@ pub enum CloudPreset {
     Elastic,
     GrafanaTempo,
     Jaeger,
+    Zipkin,
+    OtlpGrpc,
+    OtlpHttp,
+    Stdout,
     None,
 }
 
@@ -33,6 +41,8 @@ pub struct PresetConfig {
     pub export_mode: Option<crate::export::ExportMode>,
     pub otlp_endpoint: Option<String>,
     pub otlp_headers: HashMap<String, String>,
+    /// Recommended sampling ratio for this preset. `None` = defer to user config.
+    pub sampling_ratio: Option<f64>,
 }
 
 pub fn detect_from_env() -> Option<CloudPreset> {
@@ -48,6 +58,10 @@ pub fn detect_from_env() -> Option<CloudPreset> {
         "elastic" => Some(CloudPreset::Elastic),
         "grafana-tempo" | "grafana_tempo" => Some(CloudPreset::GrafanaTempo),
         "jaeger" => Some(CloudPreset::Jaeger),
+        "zipkin" => Some(CloudPreset::Zipkin),
+        "otlp-grpc" | "otlp_grpc" => Some(CloudPreset::OtlpGrpc),
+        "otlp-http" | "otlp_http" => Some(CloudPreset::OtlpHttp),
+        "stdout" => Some(CloudPreset::Stdout),
         "none" => Some(CloudPreset::None),
         other => {
             tracing::warn!("unknown CLOUD_PRESET value: {other}");
@@ -68,6 +82,10 @@ pub fn load_preset(preset: CloudPreset) -> Result<PresetConfig> {
         CloudPreset::Elastic => elastic::config(),
         CloudPreset::GrafanaTempo => grafana_tempo::config(),
         CloudPreset::Jaeger => jaeger::config(),
+        CloudPreset::Zipkin => zipkin::config(),
+        CloudPreset::OtlpGrpc => otlp_grpc::config(),
+        CloudPreset::OtlpHttp => otlp_http::config(),
+        CloudPreset::Stdout => stdout::config(),
         CloudPreset::None => Ok(PresetConfig::default()),
     }
 }

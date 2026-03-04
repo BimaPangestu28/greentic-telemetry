@@ -11,6 +11,7 @@ pub mod presets;
 pub mod provider;
 pub mod redaction;
 pub mod secrets;
+pub mod state_subs;
 pub mod tasklocal;
 pub mod testutil;
 pub mod wasm_guest;

@@ -37,6 +37,8 @@ pub struct ExportConfig {
     pub compression: Option<Compression>,
     /// Additional OTel resource attributes attached to the tracer/meter provider.
     pub resource_attributes: HashMap<String, String>,
+    /// TLS configuration for mTLS connections.
+    pub tls_config: Option<crate::provider::TlsConfig>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,6 +55,7 @@ impl ExportConfig {
             sampling: Sampling::Parent,
             compression: None,
             resource_attributes: HashMap::new(),
+            tls_config: None,
         }
     }
 
@@ -114,6 +117,7 @@ impl ExportConfig {
             sampling,
             compression,
             resource_attributes: HashMap::new(),
+            tls_config: None,
         })
     }
 }

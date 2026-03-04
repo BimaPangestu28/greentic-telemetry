@@ -25,5 +25,6 @@ pub fn config() -> Result<PresetConfig> {
         export_mode: Some(ExportMode::OtlpGrpc),
         otlp_endpoint: endpoint,
         otlp_headers: headers,
+        sampling_ratio: None,
     })
 }

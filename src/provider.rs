@@ -7,6 +7,45 @@ use crate::export::{Compression, ExportConfig, ExportMode, Sampling};
 use crate::init::{TelemetryConfig, init_telemetry_from_config};
 use crate::presets;
 
+/// TLS configuration for mTLS connections to OTLP endpoints.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TlsConfig {
+    #[serde(default)]
+    pub ca_cert_pem: Option<String>,
+    #[serde(default)]
+    pub client_cert_pem: Option<String>,
+    #[serde(default)]
+    pub client_key_pem: Option<String>,
+}
+
+/// Controls which tenant/team identifiers appear in spans and metrics.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TenantAttribution {
+    /// Include tenant_id in span attributes (default: true)
+    #[serde(default = "default_true")]
+    pub include_tenant: bool,
+    /// Include team_id in span attributes (default: true)
+    #[serde(default = "default_true")]
+    pub include_team: bool,
+    /// Include team_id in metric labels (default: false — cardinality concern)
+    #[serde(default)]
+    pub include_team_in_metrics: bool,
+    /// Hash tenant/team IDs before emitting (privacy/cardinality)
+    #[serde(default)]
+    pub hash_ids: bool,
+}
+
+impl Default for TenantAttribution {
+    fn default() -> Self {
+        Self {
+            include_tenant: true,
+            include_team: true,
+            include_team_in_metrics: false,
+            hash_ids: false,
+        }
+    }
+}
+
 /// Configuration returned by a telemetry provider component.
 ///
 /// This is the canonical config model for pack-based telemetry setup.
@@ -46,7 +85,7 @@ pub struct TelemetryProviderConfig {
     #[serde(default)]
     pub redaction_patterns: Vec<String>,
 
-    /// Backend preset name: "honeycomb", "datadog", "newrelic", etc.
+    /// Backend preset name: "honeycomb", "datadog", "newrelic", "zipkin", etc.
     #[serde(default)]
     pub preset: Option<String>,
 
@@ -65,6 +104,27 @@ pub struct TelemetryProviderConfig {
     /// Payload policy: "none" | "hash_only"
     #[serde(default)]
     pub payload_policy: Option<String>,
+
+    /// Minimum log level: "trace" | "debug" | "info" | "warn" | "error"
+    /// Applied via RUST_LOG before OTel init (env var takes precedence).
+    #[serde(default)]
+    pub min_log_level: Option<String>,
+
+    /// TLS configuration for mTLS connections to OTLP endpoints.
+    #[serde(default)]
+    pub tls_config: Option<TlsConfig>,
+
+    /// Operation names to skip in telemetry emission.
+    #[serde(default)]
+    pub exclude_ops: Vec<String>,
+
+    /// Hard-drop all payload content from telemetry.
+    #[serde(default)]
+    pub drop_payloads: bool,
+
+    /// Multi-tenant attribution controls.
+    #[serde(default)]
+    pub tenant_attribution: Option<TenantAttribution>,
 }
 
 fn default_export_mode() -> String {
@@ -95,6 +155,11 @@ impl Default for TelemetryProviderConfig {
             operation_subs_mode: None,
             include_denied_ops: true,
             payload_policy: None,
+            min_log_level: None,
+            tls_config: None,
+            exclude_ops: Vec::new(),
+            drop_payloads: false,
+            tenant_attribution: None,
         }
     }
 }
@@ -134,6 +199,7 @@ pub fn to_export_config(config: &TelemetryProviderConfig) -> ExportConfig {
         sampling,
         compression,
         resource_attributes: config.resource_attributes.clone(),
+        tls_config: config.tls_config.clone(),
     }
 }
 
@@ -152,6 +218,10 @@ fn resolve_with_preset(config: &TelemetryProviderConfig) -> Result<ExportConfig>
         "elastic" => presets::CloudPreset::Elastic,
         "grafana-tempo" | "grafana_tempo" => presets::CloudPreset::GrafanaTempo,
         "jaeger" => presets::CloudPreset::Jaeger,
+        "zipkin" => presets::CloudPreset::Zipkin,
+        "otlp-grpc" | "otlp_grpc" => presets::CloudPreset::OtlpGrpc,
+        "otlp-http" | "otlp_http" => presets::CloudPreset::OtlpHttp,
+        "stdout" => presets::CloudPreset::Stdout,
         _ => presets::CloudPreset::None,
     };
 
@@ -176,12 +246,19 @@ fn resolve_with_preset(config: &TelemetryProviderConfig) -> Result<ExportConfig>
     let mut headers = preset_cfg.otlp_headers;
     headers.extend(config.headers.clone());
 
-    let sampling = if config.sampling_ratio <= 0.0 {
+    // Use preset sampling as fallback when user hasn't overridden (default is 1.0)
+    let effective_ratio = if (config.sampling_ratio - 1.0).abs() < f64::EPSILON {
+        preset_cfg.sampling_ratio.unwrap_or(config.sampling_ratio)
+    } else {
+        config.sampling_ratio
+    };
+
+    let sampling = if effective_ratio <= 0.0 {
         Sampling::AlwaysOff
-    } else if config.sampling_ratio >= 1.0 {
+    } else if effective_ratio >= 1.0 {
         Sampling::AlwaysOn
     } else {
-        Sampling::TraceIdRatio(config.sampling_ratio)
+        Sampling::TraceIdRatio(effective_ratio)
     };
 
     let compression =
@@ -200,6 +277,7 @@ fn resolve_with_preset(config: &TelemetryProviderConfig) -> Result<ExportConfig>
         sampling,
         compression,
         resource_attributes: config.resource_attributes.clone(),
+        tls_config: config.tls_config.clone(),
     })
 }
 
@@ -211,6 +289,16 @@ fn resolve_with_preset(config: &TelemetryProviderConfig) -> Result<ExportConfig>
 /// Redaction patterns from the config are applied by setting `PII_MASK_REGEXES`
 /// before the telemetry pipeline initializes the redactor.
 pub fn init_from_provider_config(config: &TelemetryProviderConfig) -> Result<()> {
+    // Set RUST_LOG from min_log_level if not already set by the environment.
+    if let Some(ref level) = config.min_log_level
+        && std::env::var("RUST_LOG").is_err()
+    {
+        // Safety: called early in single-threaded init path before spawning workers.
+        unsafe {
+            std::env::set_var("RUST_LOG", level);
+        }
+    }
+
     // Set redaction patterns before init (redactor reads PII_MASK_REGEXES once)
     if !config.redaction_patterns.is_empty() {
         let joined = config.redaction_patterns.join(",");
@@ -251,6 +339,11 @@ const SENSITIVE_HEADER_KEYS: &[&str] = &[
     "dd-api-key",
 ];
 
+const KNOWN_SUBS_MODES: &[&str] = &["metrics_only", "traces_only", "metrics_and_traces"];
+const KNOWN_PAYLOAD_POLICIES: &[&str] = &["none", "hash_only"];
+const KNOWN_COMPRESSIONS: &[&str] = &["gzip"];
+const KNOWN_LOG_LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
+
 /// Validate a [`TelemetryProviderConfig`] and return a list of warnings.
 ///
 /// Checks:
@@ -287,6 +380,87 @@ pub fn validate_telemetry_config(config: &TelemetryProviderConfig) -> Vec<String
                 key
             ));
         }
+    }
+
+    // 4. sampling_ratio out of range
+    if !(0.0..=1.0).contains(&config.sampling_ratio) {
+        warnings.push(format!(
+            "sampling_ratio {} is out of range 0.0..=1.0",
+            config.sampling_ratio
+        ));
+    }
+
+    // 5. Unknown compression
+    if let Some(ref c) = config.compression
+        && !KNOWN_COMPRESSIONS.contains(&c.to_ascii_lowercase().as_str())
+    {
+        warnings.push(format!(
+            "unknown compression '{}'; expected one of: {}",
+            c,
+            KNOWN_COMPRESSIONS.join(", ")
+        ));
+    }
+
+    // 6. Unknown operation_subs_mode
+    if let Some(ref m) = config.operation_subs_mode
+        && !KNOWN_SUBS_MODES.contains(&m.to_ascii_lowercase().as_str())
+    {
+        warnings.push(format!(
+            "unknown operation_subs_mode '{}'; expected one of: {}",
+            m,
+            KNOWN_SUBS_MODES.join(", ")
+        ));
+    }
+
+    // 7. Unknown payload_policy
+    if let Some(ref p) = config.payload_policy
+        && !KNOWN_PAYLOAD_POLICIES.contains(&p.to_ascii_lowercase().as_str())
+    {
+        warnings.push(format!(
+            "unknown payload_policy '{}'; expected one of: {}",
+            p,
+            KNOWN_PAYLOAD_POLICIES.join(", ")
+        ));
+    }
+
+    // 8. Empty redaction_patterns entry
+    if config
+        .redaction_patterns
+        .iter()
+        .any(|p| p.trim().is_empty())
+    {
+        warnings.push("redaction_patterns contains an empty entry".into());
+    }
+
+    // 9. Unknown min_log_level
+    if let Some(ref level) = config.min_log_level
+        && !KNOWN_LOG_LEVELS.contains(&level.to_ascii_lowercase().as_str())
+    {
+        warnings.push(format!(
+            "unknown min_log_level '{}'; expected one of: {}",
+            level,
+            KNOWN_LOG_LEVELS.join(", ")
+        ));
+    }
+
+    // 10. TLS cert without key (or vice versa)
+    if let Some(ref tls) = config.tls_config
+        && (tls.client_cert_pem.is_some() != tls.client_key_pem.is_some())
+    {
+        warnings.push(
+            "tls_config has client_cert_pem without client_key_pem (or vice versa); both are required for mTLS".into()
+        );
+    }
+
+    // 11. hash_ids enabled but both tenant and team excluded (hashing unused)
+    if let Some(ref attr) = config.tenant_attribution
+        && attr.hash_ids
+        && !attr.include_tenant
+        && !attr.include_team
+    {
+        warnings.push(
+            "tenant_attribution.hash_ids is enabled but both include_tenant and include_team are false; hashing has no effect".into()
+        );
     }
 
     warnings
@@ -587,6 +761,294 @@ mod tests {
             },
             ..Default::default()
         };
+        let warnings = validate_telemetry_config(&config);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn validate_sampling_ratio_out_of_range() {
+        let config = TelemetryProviderConfig {
+            sampling_ratio: -0.5,
+            ..Default::default()
+        };
+        let warnings = validate_telemetry_config(&config);
+        assert!(warnings.iter().any(|w| w.contains("sampling_ratio")));
+
+        let config = TelemetryProviderConfig {
+            sampling_ratio: 1.5,
+            ..Default::default()
+        };
+        let warnings = validate_telemetry_config(&config);
+        assert!(warnings.iter().any(|w| w.contains("sampling_ratio")));
+    }
+
+    #[test]
+    fn validate_unknown_compression() {
+        let config = TelemetryProviderConfig {
+            compression: Some("lz4".into()),
+            ..Default::default()
+        };
+        let warnings = validate_telemetry_config(&config);
+        assert!(warnings.iter().any(|w| w.contains("unknown compression")));
+    }
+
+    #[test]
+    fn validate_unknown_operation_subs_mode() {
+        let config = TelemetryProviderConfig {
+            operation_subs_mode: Some("everything".into()),
+            ..Default::default()
+        };
+        let warnings = validate_telemetry_config(&config);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("unknown operation_subs_mode"))
+        );
+    }
+
+    #[test]
+    fn validate_unknown_payload_policy() {
+        let config = TelemetryProviderConfig {
+            payload_policy: Some("full_body".into()),
+            ..Default::default()
+        };
+        let warnings = validate_telemetry_config(&config);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("unknown payload_policy"))
+        );
+    }
+
+    #[test]
+    fn validate_empty_redaction_pattern() {
+        let config = TelemetryProviderConfig {
+            redaction_patterns: vec!["\\d+".into(), "".into()],
+            ..Default::default()
+        };
+        let warnings = validate_telemetry_config(&config);
+        assert!(warnings.iter().any(|w| w.contains("empty entry")));
+    }
+
+    #[test]
+    fn validate_unknown_min_log_level() {
+        let config = TelemetryProviderConfig {
+            min_log_level: Some("verbose".into()),
+            ..Default::default()
+        };
+        let warnings = validate_telemetry_config(&config);
+        assert!(warnings.iter().any(|w| w.contains("unknown min_log_level")));
+    }
+
+    #[test]
+    fn validate_valid_min_log_level_ok() {
+        let config = TelemetryProviderConfig {
+            min_log_level: Some("debug".into()),
+            ..Default::default()
+        };
+        let warnings = validate_telemetry_config(&config);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn validate_tls_cert_without_key() {
+        let config = TelemetryProviderConfig {
+            tls_config: Some(TlsConfig {
+                ca_cert_pem: None,
+                client_cert_pem: Some("cert-data".into()),
+                client_key_pem: None,
+            }),
+            ..Default::default()
+        };
+        let warnings = validate_telemetry_config(&config);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("client_cert_pem without client_key_pem"))
+        );
+    }
+
+    #[test]
+    fn validate_tls_complete_ok() {
+        let config = TelemetryProviderConfig {
+            tls_config: Some(TlsConfig {
+                ca_cert_pem: Some("ca".into()),
+                client_cert_pem: Some("cert".into()),
+                client_key_pem: Some("key".into()),
+            }),
+            ..Default::default()
+        };
+        let warnings = validate_telemetry_config(&config);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn preset_resolution_zipkin() {
+        let config = TelemetryProviderConfig {
+            preset: Some("zipkin".into()),
+            ..Default::default()
+        };
+        let export = resolve_with_preset(&config).unwrap();
+        assert_eq!(export.mode, ExportMode::OtlpHttp);
+        assert_eq!(export.endpoint.as_deref(), Some("http://localhost:9411"));
+    }
+
+    #[test]
+    fn new_fields_default_values() {
+        let config = TelemetryProviderConfig::default();
+        assert!(config.min_log_level.is_none());
+        assert!(config.tls_config.is_none());
+        assert!(config.exclude_ops.is_empty());
+        assert!(!config.drop_payloads);
+        assert!(config.tenant_attribution.is_none());
+    }
+
+    #[test]
+    fn new_fields_serde_roundtrip() {
+        let config = TelemetryProviderConfig {
+            min_log_level: Some("debug".into()),
+            tls_config: Some(TlsConfig {
+                ca_cert_pem: Some("ca-data".into()),
+                client_cert_pem: None,
+                client_key_pem: None,
+            }),
+            exclude_ops: vec!["healthcheck".into(), "ping".into()],
+            drop_payloads: true,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: TelemetryProviderConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.min_log_level.as_deref(), Some("debug"));
+        assert!(deserialized.tls_config.is_some());
+        assert_eq!(deserialized.exclude_ops.len(), 2);
+        assert!(deserialized.drop_payloads);
+    }
+
+    // --- Story 4.1: Convenience presets ---
+
+    #[test]
+    fn preset_resolution_otlp_grpc() {
+        let config = TelemetryProviderConfig {
+            preset: Some("otlp-grpc".into()),
+            ..Default::default()
+        };
+        let export = resolve_with_preset(&config).unwrap();
+        assert_eq!(export.mode, ExportMode::OtlpGrpc);
+        assert_eq!(export.endpoint.as_deref(), Some("http://localhost:4317"));
+    }
+
+    #[test]
+    fn preset_resolution_otlp_http() {
+        let config = TelemetryProviderConfig {
+            preset: Some("otlp-http".into()),
+            ..Default::default()
+        };
+        let export = resolve_with_preset(&config).unwrap();
+        assert_eq!(export.mode, ExportMode::OtlpHttp);
+        assert_eq!(export.endpoint.as_deref(), Some("http://localhost:4318"));
+    }
+
+    #[test]
+    fn preset_resolution_stdout() {
+        let config = TelemetryProviderConfig {
+            preset: Some("stdout".into()),
+            ..Default::default()
+        };
+        let export = resolve_with_preset(&config).unwrap();
+        assert_eq!(export.mode, ExportMode::JsonStdout);
+        assert!(export.endpoint.is_none());
+    }
+
+    #[test]
+    fn preset_sampling_fallback() {
+        // When user hasn't changed sampling (default 1.0) and preset provides a ratio,
+        // the preset's ratio should be used.
+        // Current presets all return None, so the fallback should remain 1.0 (AlwaysOn).
+        let config = TelemetryProviderConfig {
+            preset: Some("jaeger".into()),
+            ..Default::default()
+        };
+        let export = resolve_with_preset(&config).unwrap();
+        assert!(matches!(export.sampling, Sampling::AlwaysOn));
+    }
+
+    #[test]
+    fn explicit_sampling_overrides_preset() {
+        let config = TelemetryProviderConfig {
+            preset: Some("jaeger".into()),
+            sampling_ratio: 0.5,
+            ..Default::default()
+        };
+        let export = resolve_with_preset(&config).unwrap();
+        assert!(
+            matches!(export.sampling, Sampling::TraceIdRatio(r) if (r - 0.5).abs() < f64::EPSILON)
+        );
+    }
+
+    // --- Story 4.2: Tenant attribution ---
+
+    #[test]
+    fn tenant_attribution_default_values() {
+        let attr = TenantAttribution::default();
+        assert!(attr.include_tenant);
+        assert!(attr.include_team);
+        assert!(!attr.include_team_in_metrics);
+        assert!(!attr.hash_ids);
+    }
+
+    #[test]
+    fn tenant_attribution_serde_roundtrip() {
+        let config = TelemetryProviderConfig {
+            tenant_attribution: Some(TenantAttribution {
+                include_tenant: true,
+                include_team: false,
+                include_team_in_metrics: true,
+                hash_ids: true,
+            }),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: TelemetryProviderConfig = serde_json::from_str(&json).unwrap();
+        let attr = deserialized.tenant_attribution.unwrap();
+        assert!(attr.include_tenant);
+        assert!(!attr.include_team);
+        assert!(attr.include_team_in_metrics);
+        assert!(attr.hash_ids);
+    }
+
+    #[test]
+    fn validate_hash_ids_without_includes_warns() {
+        let config = TelemetryProviderConfig {
+            tenant_attribution: Some(TenantAttribution {
+                include_tenant: false,
+                include_team: false,
+                include_team_in_metrics: false,
+                hash_ids: true,
+            }),
+            ..Default::default()
+        };
+        let warnings = validate_telemetry_config(&config);
+        assert!(warnings.iter().any(|w| w.contains("hash_ids")));
+    }
+
+    #[test]
+    fn validate_hash_ids_with_includes_ok() {
+        let config = TelemetryProviderConfig {
+            tenant_attribution: Some(TenantAttribution {
+                include_tenant: true,
+                include_team: true,
+                include_team_in_metrics: false,
+                hash_ids: true,
+            }),
+            ..Default::default()
+        };
+        let warnings = validate_telemetry_config(&config);
+        assert!(!warnings.iter().any(|w| w.contains("hash_ids")));
+    }
+
+    #[test]
+    fn tenant_attribution_none_no_warnings() {
+        let config = TelemetryProviderConfig::default();
         let warnings = validate_telemetry_config(&config);
         assert!(warnings.is_empty());
     }

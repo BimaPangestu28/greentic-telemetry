@@ -13,6 +13,7 @@ async fn otlp_pipeline_initializes() {
         sampling: Sampling::TraceIdRatio(1.0),
         compression: None,
         resource_attributes: HashMap::new(),
+        tls_config: None,
     };
 
     init_telemetry_from_config(
