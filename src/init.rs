@@ -150,6 +150,26 @@ fn configure_otlp(service_name: &str) -> Result<()> {
 
 #[cfg(feature = "otlp")]
 fn install_otlp(endpoint: &str, resource: Resource) -> Result<()> {
+    // Tonic/hyper gRPC exporters require a Tokio runtime for the underlying
+    // HTTP/2 connection.  When called from a plain `fn main()` (no runtime),
+    // we spin up a lightweight current-thread runtime just for the builder
+    // calls and keep it alive for the background batch export tasks.
+    if tokio::runtime::Handle::try_current().is_err() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| anyhow!("failed to create tokio runtime for OTLP init: {e}"))?;
+        let _guard = rt.enter();
+        install_otlp_inner(endpoint, resource)?;
+        // Leak the runtime so background exporters keep running.
+        std::mem::forget(rt);
+        return Ok(());
+    }
+    install_otlp_inner(endpoint, resource)
+}
+
+#[cfg(feature = "otlp")]
+fn install_otlp_inner(endpoint: &str, resource: Resource) -> Result<()> {
     let mut span_exporter_builder = SpanExporter::builder().with_tonic();
     span_exporter_builder = span_exporter_builder.with_endpoint(endpoint.to_string());
     let span_exporter = redaction::wrap_span_exporter(span_exporter_builder.build()?);
@@ -213,6 +233,23 @@ fn install_otlp_from_export(cfg: TelemetryConfig, export: ExportConfig) -> Resul
         return Ok(());
     }
 
+    // Ensure a Tokio runtime is available for tonic/hyper gRPC builders.
+    if tokio::runtime::Handle::try_current().is_err() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| anyhow!("failed to create tokio runtime for OTLP init: {e}"))?;
+        let _guard = rt.enter();
+        let result = install_otlp_from_export_inner(cfg, export);
+        // Leak the runtime so background exporters keep running.
+        std::mem::forget(rt);
+        return result;
+    }
+    install_otlp_from_export_inner(cfg, export)
+}
+
+#[cfg(feature = "otlp")]
+fn install_otlp_from_export_inner(cfg: TelemetryConfig, export: ExportConfig) -> Result<()> {
     let endpoint = export.endpoint.unwrap_or_else(|| match export.mode {
         ExportMode::OtlpHttp => "http://localhost:4318".into(),
         _ => "http://localhost:4317".into(),
