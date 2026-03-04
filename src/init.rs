@@ -155,13 +155,14 @@ fn install_otlp(endpoint: &str, resource: Resource) -> Result<()> {
     // we spin up a lightweight current-thread runtime just for the builder
     // calls and keep it alive for the background batch export tasks.
     if tokio::runtime::Handle::try_current().is_err() {
-        let rt = tokio::runtime::Builder::new_current_thread()
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
             .enable_all()
             .build()
             .map_err(|e| anyhow!("failed to create tokio runtime for OTLP init: {e}"))?;
         let _guard = rt.enter();
         install_otlp_inner(endpoint, resource)?;
-        // Leak the runtime so background exporters keep running.
+        // Leak the runtime so the worker thread keeps driving batch exporters.
         std::mem::forget(rt);
         return Ok(());
     }
@@ -235,13 +236,14 @@ fn install_otlp_from_export(cfg: TelemetryConfig, export: ExportConfig) -> Resul
 
     // Ensure a Tokio runtime is available for tonic/hyper gRPC builders.
     if tokio::runtime::Handle::try_current().is_err() {
-        let rt = tokio::runtime::Builder::new_current_thread()
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
             .enable_all()
             .build()
             .map_err(|e| anyhow!("failed to create tokio runtime for OTLP init: {e}"))?;
         let _guard = rt.enter();
         let result = install_otlp_from_export_inner(cfg, export);
-        // Leak the runtime so background exporters keep running.
+        // Leak the runtime so the worker thread keeps driving batch exporters.
         std::mem::forget(rt);
         return result;
     }
@@ -255,8 +257,7 @@ fn install_otlp_from_export_inner(cfg: TelemetryConfig, export: ExportConfig) ->
         _ => "http://localhost:4317".into(),
     });
 
-    let mut resource_builder = Resource::builder()
-        .with_service_name(cfg.service_name);
+    let mut resource_builder = Resource::builder().with_service_name(cfg.service_name);
     for (key, value) in &export.resource_attributes {
         resource_builder =
             resource_builder.with_attribute(KeyValue::new(key.clone(), value.clone()));
