@@ -11,7 +11,7 @@ use opentelemetry_sdk::{
     metrics::SdkMeterProvider,
     propagation::TraceContextPropagator,
     resource::Resource,
-    trace::{BatchSpanProcessor, Sampler, SdkTracerProvider},
+    trace::{Sampler, SdkTracerProvider},
 };
 #[cfg(feature = "otlp")]
 use std::collections::HashMap;
@@ -175,10 +175,9 @@ fn install_otlp_inner(endpoint: &str, resource: Resource) -> Result<()> {
     span_exporter_builder = span_exporter_builder.with_endpoint(endpoint.to_string());
     let span_exporter = redaction::wrap_span_exporter(span_exporter_builder.build()?);
 
-    let span_processor = BatchSpanProcessor::builder(span_exporter).build();
     let tracer_provider = SdkTracerProvider::builder()
         .with_resource(resource.clone())
-        .with_span_processor(span_processor)
+        .with_batch_exporter(span_exporter)
         .build();
     global::set_tracer_provider(tracer_provider.clone());
     let _ = TRACER_PROVIDER.set(tracer_provider);
