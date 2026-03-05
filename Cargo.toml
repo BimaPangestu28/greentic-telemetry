@@ -30,6 +30,24 @@ json-stdout = []
 otlp-grpc = []
 otlp-http = []
 payload-hash = ["blake3"]
+azure = [
+    "opentelemetry",
+    "opentelemetry_sdk",
+    "tracing-opentelemetry",
+    "dep:opentelemetry-application-insights",
+    "dep:opentelemetry-http",
+    "dep:reqwest",
+]
+aws = [
+    "otlp",
+    "dep:opentelemetry-aws",
+]
+gcp = [
+    "opentelemetry",
+    "opentelemetry_sdk",
+    "tracing-opentelemetry",
+    "dep:opentelemetry-gcloud-trace",
+]
 
 [dependencies]
 anyhow = "1"
@@ -48,6 +66,11 @@ serde_json = "1"
 thiserror = "2"
 console-subscriber = { version = "0.5", optional = true }
 blake3 = { version = "1", optional = true }
+opentelemetry-application-insights = { version = "0.44", default-features = false, features = ["trace", "metrics"], optional = true }
+opentelemetry-http = { version = "0.31", features = ["reqwest"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
+opentelemetry-aws = { version = "0.19", default-features = false, features = ["trace"], optional = true }
+opentelemetry-gcloud-trace = { version = "0.22", optional = true }
 
 [dev-dependencies]
 uuid = { version = "1", features = ["v4"] }

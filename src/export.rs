@@ -10,6 +10,9 @@ pub enum ExportMode {
     JsonStdout,
     OtlpGrpc,
     OtlpHttp,
+    AzureAppInsights,
+    AwsXRay,
+    GcpCloudTrace,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -81,9 +84,13 @@ impl ExportConfig {
             "json-stdout" => ExportMode::JsonStdout,
             "otlp-grpc" => ExportMode::OtlpGrpc,
             "otlp-http" => ExportMode::OtlpHttp,
+            "azure-appinsights" => ExportMode::AzureAppInsights,
+            "aws-xray" => ExportMode::AwsXRay,
+            "gcp-cloud-trace" => ExportMode::GcpCloudTrace,
             other => {
                 return Err(anyhow!(
-                    "unsupported TELEMETRY_EXPORT value: {other}. expected one of json-stdout, otlp-grpc, otlp-http"
+                    "unsupported TELEMETRY_EXPORT value: {other}. expected one of \
+                     json-stdout, otlp-grpc, otlp-http, azure-appinsights, aws-xray, gcp-cloud-trace"
                 ));
             }
         };

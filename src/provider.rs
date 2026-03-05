@@ -170,6 +170,9 @@ pub fn to_export_config(config: &TelemetryProviderConfig) -> ExportConfig {
     let mode = match config.export_mode.to_ascii_lowercase().as_str() {
         "otlp-grpc" => ExportMode::OtlpGrpc,
         "otlp-http" => ExportMode::OtlpHttp,
+        "azure-appinsights" => ExportMode::AzureAppInsights,
+        "aws-xray" => ExportMode::AwsXRay,
+        "gcp-cloud-trace" => ExportMode::GcpCloudTrace,
         "json-stdout" => ExportMode::JsonStdout,
         "none" => ExportMode::JsonStdout,
         _ => ExportMode::JsonStdout,
@@ -233,6 +236,9 @@ fn resolve_with_preset(config: &TelemetryProviderConfig) -> Result<ExportConfig>
         match config.export_mode.to_ascii_lowercase().as_str() {
             "otlp-grpc" => ExportMode::OtlpGrpc,
             "otlp-http" => ExportMode::OtlpHttp,
+            "azure-appinsights" => ExportMode::AzureAppInsights,
+            "aws-xray" => ExportMode::AwsXRay,
+            "gcp-cloud-trace" => ExportMode::GcpCloudTrace,
             _ => ExportMode::JsonStdout,
         }
     } else {
@@ -327,7 +333,15 @@ pub fn init_from_provider_config(config: &TelemetryProviderConfig) -> Result<()>
 // ---------------------------------------------------------------------------
 
 /// Known export modes.
-const KNOWN_EXPORT_MODES: &[&str] = &["otlp-grpc", "otlp-http", "json-stdout", "none"];
+const KNOWN_EXPORT_MODES: &[&str] = &[
+    "otlp-grpc",
+    "otlp-http",
+    "json-stdout",
+    "azure-appinsights",
+    "aws-xray",
+    "gcp-cloud-trace",
+    "none",
+];
 
 /// Header keys that should be secrets-backed rather than plain text.
 const SENSITIVE_HEADER_KEYS: &[&str] = &[

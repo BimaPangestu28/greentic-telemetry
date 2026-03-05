@@ -1,9 +1,9 @@
 use once_cell::sync::OnceCell;
-#[cfg(feature = "otlp")]
+#[cfg(any(feature = "otlp", feature = "azure", feature = "gcp"))]
 use opentelemetry::{KeyValue, Value};
-#[cfg(feature = "otlp")]
+#[cfg(any(feature = "otlp", feature = "azure", feature = "gcp"))]
 use opentelemetry_sdk::error::OTelSdkResult;
-#[cfg(feature = "otlp")]
+#[cfg(any(feature = "otlp", feature = "azure", feature = "gcp"))]
 use opentelemetry_sdk::trace::{SpanData, SpanExporter};
 use std::fmt;
 use tracing_subscriber::field::{RecordFields, Visit};
@@ -257,18 +257,18 @@ impl<'a, 'writer> Visit for RedactingVisitor<'a, 'writer> {
     }
 }
 
-#[cfg(feature = "otlp")]
+#[cfg(any(feature = "otlp", feature = "azure", feature = "gcp"))]
 pub fn wrap_span_exporter<E: SpanExporter>(inner: E) -> RedactingSpanExporter<E> {
     RedactingSpanExporter { inner }
 }
 
-#[cfg(feature = "otlp")]
+#[cfg(any(feature = "otlp", feature = "azure", feature = "gcp"))]
 #[derive(Debug)]
 pub struct RedactingSpanExporter<E> {
     inner: E,
 }
 
-#[cfg(feature = "otlp")]
+#[cfg(any(feature = "otlp", feature = "azure", feature = "gcp"))]
 impl<E: SpanExporter> SpanExporter for RedactingSpanExporter<E> {
     fn export(
         &self,
@@ -288,7 +288,7 @@ impl<E: SpanExporter> SpanExporter for RedactingSpanExporter<E> {
     }
 }
 
-#[cfg(feature = "otlp")]
+#[cfg(any(feature = "otlp", feature = "azure", feature = "gcp"))]
 fn redact_attributes(attrs: &mut [KeyValue]) {
     for kv in attrs.iter_mut() {
         if let Value::String(ref mut string_val) = kv.value {
