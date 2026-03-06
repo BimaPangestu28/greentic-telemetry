@@ -743,19 +743,23 @@ fn install_aws_xray_direct(
         })?
         .clone();
 
-    let endpoint = format!("https://xray.{region}.amazonaws.com");
-    eprintln!("AWS X-Ray direct mode: endpoint={endpoint}, region={region}");
+    let base_endpoint = format!("https://xray.{region}.amazonaws.com");
+    let traces_endpoint = format!("{base_endpoint}/v1/traces");
+    let metrics_endpoint = format!("{base_endpoint}/v1/metrics");
+    eprintln!("AWS X-Ray direct mode: endpoint={base_endpoint}, region={region}");
 
     // Create SigV4 HTTP client
     let sigv4_client = SigV4HttpClient::new(credentials_provider, region);
 
     // Build OTLP/HTTP span exporter with SigV4 client.
+    // Note: with_endpoint() uses the URL as-is (no auto-append of /v1/traces),
+    // so we must include the full signal path.
     // Wrap with RuntimeBound so the batch processor's background thread
     // has access to a tokio runtime for DNS resolution (hyper-util).
     let span_exporter = SpanExporter::builder()
         .with_http()
         .with_http_client(sigv4_client.clone())
-        .with_endpoint(&endpoint)
+        .with_endpoint(&traces_endpoint)
         .build()
         .map_err(|e| anyhow!("AWS X-Ray span exporter build failed: {e}"))?;
     let span_exporter = redaction::wrap_span_exporter(span_exporter);
@@ -777,7 +781,7 @@ fn install_aws_xray_direct(
     let metric_exporter = MetricExporter::builder()
         .with_http()
         .with_http_client(sigv4_client)
-        .with_endpoint(&endpoint)
+        .with_endpoint(&metrics_endpoint)
         .build()
         .map_err(|e| anyhow!("AWS X-Ray metric exporter build failed: {e}"))?;
     let metric_exporter = RuntimeBoundMetricExporter {
