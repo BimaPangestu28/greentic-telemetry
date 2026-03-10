@@ -80,7 +80,9 @@ async fn emit_azure_direct() -> anyhow::Result<()> {
     tokio::time::sleep(Duration::from_secs(6)).await;
 
     shutdown();
-    eprintln!("Shutdown complete. Check Azure Portal → App Insights → Transaction search for marker: {marker}");
+    eprintln!(
+        "Shutdown complete. Check Azure Portal → App Insights → Transaction search for marker: {marker}"
+    );
     Ok(())
 }
 
@@ -135,7 +137,9 @@ async fn emit_gcp_direct() -> anyhow::Result<()> {
         export,
     )?;
 
-    eprintln!("GCP exporter initialized (project={project_id}) — emitting spans with marker={marker}");
+    eprintln!(
+        "GCP exporter initialized (project={project_id}) — emitting spans with marker={marker}"
+    );
 
     for i in 0..3 {
         let span = span!(Level::INFO, "gcp_smoke", marker = %marker, iteration = i);

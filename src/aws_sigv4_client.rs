@@ -32,10 +32,7 @@ impl fmt::Debug for SigV4HttpClient {
 }
 
 impl SigV4HttpClient {
-    pub(crate) fn new(
-        credentials_provider: SharedCredentialsProvider,
-        region: String,
-    ) -> Self {
+    pub(crate) fn new(credentials_provider: SharedCredentialsProvider, region: String) -> Self {
         Self {
             inner: reqwest::Client::new(),
             credentials_provider,
@@ -46,10 +43,7 @@ impl SigV4HttpClient {
 
 #[async_trait]
 impl opentelemetry_http::HttpClient for SigV4HttpClient {
-    async fn send_bytes(
-        &self,
-        request: Request<Bytes>,
-    ) -> Result<Response<Bytes>, HttpError> {
+    async fn send_bytes(&self, request: Request<Bytes>) -> Result<Response<Bytes>, HttpError> {
         // Resolve current credentials from the provider chain
         let creds = self
             .credentials_provider

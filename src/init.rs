@@ -19,21 +19,33 @@ use std::collections::HashMap;
 use std::io::IsTerminal;
 #[cfg(feature = "dev")]
 use tracing_appender::rolling;
-#[cfg(any(feature = "dev", feature = "prod-json", feature = "otlp", feature = "azure", feature = "gcp"))]
+#[cfg(any(
+    feature = "dev",
+    feature = "prod-json",
+    feature = "otlp",
+    feature = "azure",
+    feature = "gcp"
+))]
 use tracing_subscriber::EnvFilter;
 #[cfg(any(feature = "otlp", feature = "azure", feature = "gcp"))]
 use tracing_subscriber::Registry;
-#[cfg(any(feature = "otlp", feature = "azure", feature = "gcp"))]
-use tracing_subscriber::reload;
 #[cfg(any(feature = "dev", feature = "prod-json"))]
 use tracing_subscriber::fmt;
-#[cfg(any(feature = "dev", feature = "prod-json", feature = "otlp", feature = "azure", feature = "gcp"))]
+#[cfg(any(
+    feature = "dev",
+    feature = "prod-json",
+    feature = "otlp",
+    feature = "azure",
+    feature = "gcp"
+))]
 use tracing_subscriber::prelude::*;
-
 #[cfg(any(feature = "otlp", feature = "azure", feature = "gcp"))]
-use crate::export::Sampling;
+use tracing_subscriber::reload;
+
 #[cfg(feature = "otlp")]
 use crate::export::Compression;
+#[cfg(any(feature = "otlp", feature = "azure", feature = "gcp"))]
+use crate::export::Sampling;
 use crate::export::{ExportConfig, ExportMode};
 use crate::redaction;
 #[cfg(any(feature = "dev", feature = "prod-json"))]
@@ -86,8 +98,7 @@ fn init_otel_subscriber() {
     use opentelemetry::trace::TracerProvider as _;
     let provider = TRACER_PROVIDER.get().unwrap();
     let tracer = provider.tracer("greentic-telemetry");
-    let otel_layer: BoxedOtelLayer =
-        Box::new(tracing_opentelemetry::layer().with_tracer(tracer));
+    let otel_layer: BoxedOtelLayer = Box::new(tracing_opentelemetry::layer().with_tracer(tracer));
 
     // If a subscriber with a reload handle already exists (Stage 1 set it up),
     // hot-swap the OTel layer into the existing subscriber.
@@ -206,8 +217,7 @@ fn init_fmt_layers(_cfg: &TelemetryConfig) -> Result<()> {
         any(feature = "otlp", feature = "azure", feature = "gcp")
     ))]
     {
-        let filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new("info"));
+        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
         let initial_otel: Option<BoxedOtelLayer> = TRACER_PROVIDER.get().map(|p| {
             use opentelemetry::trace::TracerProvider as _;
             Box::new(tracing_opentelemetry::layer().with_tracer(p.tracer("greentic-telemetry")))
@@ -532,12 +542,11 @@ fn install_azure_appinsights_inner(
 
     // Trace exporter — wrap with runtime binding so the batch processor
     // thread (plain OS thread) can use reqwest for HTTP calls.
-    let trace_exporter =
-        opentelemetry_application_insights::Exporter::new_from_connection_string(
-            &conn_str,
-            http_client.clone(),
-        )
-        .map_err(|e| anyhow!("Azure App Insights trace exporter init failed: {e}"))?;
+    let trace_exporter = opentelemetry_application_insights::Exporter::new_from_connection_string(
+        &conn_str,
+        http_client.clone(),
+    )
+    .map_err(|e| anyhow!("Azure App Insights trace exporter init failed: {e}"))?;
     let trace_exporter = RuntimeBoundSpanExporter {
         inner: trace_exporter,
         rt: rt_handle.clone(),
@@ -553,12 +562,11 @@ fn install_azure_appinsights_inner(
     let _ = TRACER_PROVIDER.set(tracer_provider);
 
     // Metric exporter — same runtime binding.
-    let metric_exporter =
-        opentelemetry_application_insights::Exporter::new_from_connection_string(
-            &conn_str,
-            http_client,
-        )
-        .map_err(|e| anyhow!("Azure App Insights metric exporter init failed: {e}"))?;
+    let metric_exporter = opentelemetry_application_insights::Exporter::new_from_connection_string(
+        &conn_str,
+        http_client,
+    )
+    .map_err(|e| anyhow!("Azure App Insights metric exporter init failed: {e}"))?;
     let metric_exporter = RuntimeBoundMetricExporter {
         inner: metric_exporter,
         rt: rt_handle,
@@ -594,8 +602,8 @@ struct RuntimeBoundSpanExporter<E> {
 }
 
 #[cfg(any(feature = "azure", feature = "aws"))]
-impl<E: opentelemetry_sdk::trace::SpanExporter + 'static>
-    opentelemetry_sdk::trace::SpanExporter for RuntimeBoundSpanExporter<E>
+impl<E: opentelemetry_sdk::trace::SpanExporter + 'static> opentelemetry_sdk::trace::SpanExporter
+    for RuntimeBoundSpanExporter<E>
 {
     fn export(
         &self,
@@ -734,11 +742,7 @@ fn install_aws_xray_direct(
         .headers
         .get("_aws_region")
         .cloned()
-        .or_else(|| {
-            aws_config
-                .region()
-                .map(|r| r.as_ref().to_string())
-        })
+        .or_else(|| aws_config.region().map(|r| r.as_ref().to_string()))
         .ok_or_else(|| {
             anyhow!(
                 "AWS X-Ray direct mode requires a region. \
@@ -821,15 +825,17 @@ fn install_aws_xray_collector(
     resource: Resource,
     sampler: Sampler,
 ) -> Result<()> {
-    let endpoint = export.endpoint.unwrap_or_else(|| "http://localhost:4317".into());
+    let endpoint = export
+        .endpoint
+        .unwrap_or_else(|| "http://localhost:4317".into());
 
-    if !export.headers.is_empty() {
-        if let Some(serialized) = serialize_headers(&export.headers) {
-            unsafe {
-                std::env::set_var("OTEL_EXPORTER_OTLP_HEADERS", &serialized);
-                std::env::set_var("OTEL_EXPORTER_OTLP_TRACES_HEADERS", &serialized);
-                std::env::set_var("OTEL_EXPORTER_OTLP_METRICS_HEADERS", serialized.clone());
-            }
+    if !export.headers.is_empty()
+        && let Some(serialized) = serialize_headers(&export.headers)
+    {
+        unsafe {
+            std::env::set_var("OTEL_EXPORTER_OTLP_HEADERS", &serialized);
+            std::env::set_var("OTEL_EXPORTER_OTLP_TRACES_HEADERS", &serialized);
+            std::env::set_var("OTEL_EXPORTER_OTLP_METRICS_HEADERS", serialized.clone());
         }
     }
 
